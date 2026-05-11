@@ -6,6 +6,7 @@ Real-time collection recovery analytics and forecasting
 
 import sys
 from pathlib import Path
+from io import BytesIO
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -125,6 +126,175 @@ def style_chart(fig, height=380, legend_orientation="h"):
         title_font=dict(color="#1f2937")
     )
     return fig
+
+
+def make_excel_safe(df):
+    """Prepare dashboard data for Excel export."""
+    export_df = df.copy()
+    for col in export_df.columns:
+        if pd.api.types.is_datetime64_any_dtype(export_df[col]):
+            try:
+                export_df[col] = export_df[col].dt.tz_localize(None)
+            except TypeError:
+                pass
+    return export_df
+
+
+def autosize_sheet(ws):
+    for column_cells in ws.columns:
+        values = [cell.value for cell in column_cells if cell.value is not None]
+        if not values:
+            continue
+        width = min(max(len(str(value)) for value in values) + 2, 42)
+        ws.column_dimensions[column_cells[0].column_letter].width = width
+    ws.freeze_panes = "A2"
+
+
+def build_excel_dashboard(
+    filtered_data,
+    kpi_data,
+    scenario_data,
+    contractor_data,
+    urgent_data,
+    critical_data,
+):
+    """Create a multi-sheet Excel dashboard workbook with native Excel charts."""
+    from openpyxl.chart import BarChart, PieChart, Reference
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    output = BytesIO()
+
+    risk_summary = (
+        filtered_data["Risk_Category"]
+        .fillna("Unknown")
+        .value_counts()
+        .rename_axis("Risk Category")
+        .reset_index(name="Customers")
+    ) if "Risk_Category" in filtered_data.columns else pd.DataFrame()
+
+    due_export = pd.DataFrame()
+    if {"Charged until", "Risk_Category"}.issubset(filtered_data.columns):
+        due_source = filtered_data.dropna(subset=["Charged until"]).copy()
+        due_source["Due Date"] = due_source["Charged until"].dt.date
+        due_export = (
+            due_source
+            .groupby(["Due Date", "Risk_Category"])
+            .size()
+            .unstack(fill_value=0)
+            .reset_index()
+        )
+        risk_columns = [col for col in due_export.columns if col != "Due Date"]
+        due_export["Total Customers"] = due_export[risk_columns].sum(axis=1)
+
+    plan_export = pd.DataFrame()
+    if {"Charged until", "Plan_Type", "Monthly_Payment"}.issubset(filtered_data.columns):
+        plan_source = filtered_data.dropna(subset=["Charged until"]).copy()
+        plan_source["Due Date"] = plan_source["Charged until"].dt.date
+        plan_export = (
+            plan_source
+            .pivot_table(
+                index="Due Date",
+                columns="Plan_Type",
+                values="Monthly_Payment",
+                aggfunc="sum",
+                fill_value=0
+            )
+            .reset_index()
+        )
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        kpi_data.to_excel(writer, sheet_name="KPI Summary", index=False)
+        risk_summary.to_excel(writer, sheet_name="Risk Summary", index=False)
+        due_export.to_excel(writer, sheet_name="Customers by Due Date", index=False)
+        plan_export.to_excel(writer, sheet_name="Plan Payment Trend", index=False)
+        scenario_data.to_excel(writer, sheet_name="Scenario Analysis", index=False)
+        make_excel_safe(contractor_data).to_excel(writer, sheet_name="Contractors", index=False)
+        make_excel_safe(urgent_data).to_excel(writer, sheet_name="Urgent Followups", index=False)
+        make_excel_safe(critical_data).to_excel(writer, sheet_name="Critical Cases", index=False)
+        make_excel_safe(filtered_data).to_excel(writer, sheet_name="Filtered Data", index=False)
+
+        workbook = writer.book
+
+        for sheet in workbook.worksheets:
+            header_fill = PatternFill("solid", fgColor="15803D")
+            for cell in sheet[1]:
+                cell.fill = header_fill
+                cell.font = Font(color="FFFFFF", bold=True)
+                cell.alignment = Alignment(horizontal="center")
+            autosize_sheet(sheet)
+
+        dashboard = workbook.create_sheet("Excel Dashboard", 0)
+        dashboard["A1"] = "RECAPO Excel Dashboard"
+        dashboard["A1"].font = Font(size=18, bold=True, color="14532D")
+        dashboard["A3"] = "Use the sheets below for KPI summary, risk distribution, due-date load, plan trend, scenarios, contractors, urgent followups, and critical cases."
+        dashboard["A3"].alignment = Alignment(wrap_text=True)
+        dashboard.column_dimensions["A"].width = 110
+
+        if len(risk_summary) > 0:
+            ws = workbook["Risk Summary"]
+            chart = PieChart()
+            chart.title = "Risk Distribution"
+            labels = Reference(ws, min_col=1, min_row=2, max_row=ws.max_row)
+            data = Reference(ws, min_col=2, min_row=1, max_row=ws.max_row)
+            chart.add_data(data, titles_from_data=True)
+            chart.set_categories(labels)
+            chart.height = 8
+            chart.width = 12
+            dashboard.add_chart(chart, "A5")
+
+        if len(due_export) > 0:
+            ws = workbook["Customers by Due Date"]
+            max_col = max(ws.max_column - 1, 2)
+            chart = BarChart()
+            chart.type = "col"
+            chart.style = 10
+            chart.grouping = "stacked"
+            chart.overlap = 100
+            chart.title = "Customers by Due Date"
+            chart.y_axis.title = "Customers"
+            chart.x_axis.title = "Due Date"
+            data = Reference(ws, min_col=2, max_col=max_col, min_row=1, max_row=ws.max_row)
+            cats = Reference(ws, min_col=1, min_row=2, max_row=ws.max_row)
+            chart.add_data(data, titles_from_data=True)
+            chart.set_categories(cats)
+            chart.height = 8
+            chart.width = 18
+            dashboard.add_chart(chart, "J5")
+
+        if len(plan_export) > 0:
+            ws = workbook["Plan Payment Trend"]
+            chart = BarChart()
+            chart.type = "col"
+            chart.style = 10
+            chart.title = "Plan Payment Trend"
+            chart.y_axis.title = "Monthly Payment"
+            chart.x_axis.title = "Due Date"
+            data = Reference(ws, min_col=2, max_col=ws.max_column, min_row=1, max_row=ws.max_row)
+            cats = Reference(ws, min_col=1, min_row=2, max_row=ws.max_row)
+            chart.add_data(data, titles_from_data=True)
+            chart.set_categories(cats)
+            chart.height = 8
+            chart.width = 18
+            dashboard.add_chart(chart, "A22")
+
+        if len(scenario_data) > 0:
+            ws = workbook["Scenario Analysis"]
+            chart = BarChart()
+            chart.type = "col"
+            chart.style = 10
+            chart.title = "Scenario Analysis"
+            chart.y_axis.title = "MWK"
+            chart.x_axis.title = "Scenario"
+            data = Reference(ws, min_col=2, max_col=ws.max_column, min_row=1, max_row=ws.max_row)
+            cats = Reference(ws, min_col=1, min_row=2, max_row=ws.max_row)
+            chart.add_data(data, titles_from_data=True)
+            chart.set_categories(cats)
+            chart.height = 8
+            chart.width = 14
+            dashboard.add_chart(chart, "J22")
+
+    output.seek(0)
+    return output.getvalue()
 
 # ================= LOAD DATA =================
 def load_data():
@@ -377,7 +547,7 @@ st.dataframe(
 st.markdown("---")
 
 # Row 1: Risk Distribution, Collection, and Trend
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.subheader("Risk Distribution")
@@ -835,6 +1005,22 @@ with col3:
         critical_csv,
         "recapo_critical.csv",
         "text/csv"
+    )
+
+with col4:
+    excel_dashboard = build_excel_dashboard(
+        filtered_df,
+        kpi_summary,
+        scenario_df,
+        contractors_perf,
+        get_urgent_followups(filtered_df, 50),
+        get_critical_cases(filtered_df, 180),
+    )
+    st.download_button(
+        "Download Excel Dashboard",
+        excel_dashboard,
+        "recapo_dashboard.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 # ================= FOOTER =================
