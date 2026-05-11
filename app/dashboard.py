@@ -36,6 +36,96 @@ st.set_page_config(
 st.title("📊 RECAPO Recovery Intelligence System")
 st.markdown("Real-time collection analytics & payment forecast engine")
 
+# ================= VISUAL THEME =================
+CHART_TEMPLATE = "plotly_white"
+CHART_COLORS = {
+    "primary": "#15803d",
+    "secondary": "#22c55e",
+    "accent": "#84cc16",
+    "danger": "#dc2626",
+    "muted": "#4b6355",
+    "surface": "rgba(0,0,0,0)",
+    "grid": "#e2e8f0",
+}
+RISK_COLORS = {
+    "On Track": "#16a34a",
+    "Watchlist": "#facc15",
+    "Medium Risk": "#f97316",
+    "High Risk": "#ef4444",
+    "Critical": "#7f1d1d",
+    "Completed": "#0f766e",
+    "Unknown": "#94a3b8",
+}
+
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-top: 1.75rem;
+    }
+    div[data-testid="stMetric"] {
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 14px 16px;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+    }
+    div[data-testid="stMetricLabel"] p {
+        color: #475569;
+        font-size: 0.82rem;
+        font-weight: 650;
+    }
+    div[data-testid="stMetricValue"] {
+        color: #0f172a;
+    }
+    .stDataFrame {
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+def style_chart(fig, height=380, legend_orientation="h"):
+    """Apply a consistent dashboard chart treatment."""
+    fig.update_layout(
+        template=CHART_TEMPLATE,
+        height=height,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=20, r=20, t=34, b=28),
+        font=dict(family="Arial, sans-serif", size=12, color="#334155"),
+        hoverlabel=dict(
+            bgcolor="#0f172a",
+            bordercolor="#0f172a",
+            font=dict(color="#ffffff", size=12)
+        ),
+        legend=dict(
+            orientation=legend_orientation,
+            yanchor="bottom",
+            y=1.02 if legend_orientation == "h" else 1,
+            xanchor="right",
+            x=1,
+            bgcolor="rgba(0,0,0,0)"
+        ),
+    )
+    fig.update_xaxes(
+        showgrid=False,
+        linecolor="#d7e3dc",
+        tickfont=dict(color="#334155"),
+        title_font=dict(color="#1f2937")
+    )
+    fig.update_yaxes(
+        gridcolor="#e2e8f0",
+        zerolinecolor="#d7e3dc",
+        tickfont=dict(color="#334155"),
+        title_font=dict(color="#1f2937")
+    )
+    return fig
+
 # ================= LOAD DATA =================
 def load_data():
     """Load latest CSV or Excel export from raw data folder"""
@@ -73,19 +163,29 @@ for col in numeric_cols:
 if "State" in df.columns:
     df["State"] = df["State"].str.lower().str.strip()
 
+# Extract location if available
+location_fields = [
+    c for c in df.columns
+    if any(key in c.lower() for key in ["location", "area", "zone", "region"])
+]
+if location_fields:
+    df["Location"] = (
+        df[location_fields]
+        .fillna("")
+        .astype(str)
+        .agg(", ".join,
+             axis=1)
+        .str.replace(r"^(, )+|(, )+$", "", regex=True)
+        .str.replace(r", ,", ",", regex=True)
+        .str.strip()
+    )
+
 # ================= ENGINE PIPELINE =================
 # Generate expected metrics (core KPI)
 df = generate_expected_metrics(df)
 
 # Apply risk logic
 df = apply_risk_logic(df)
-
-# Calculate all metrics
-daily_collection = calculate_daily_expected_collection(df)
-recovery = recovery_metrics(df)
-collection_metrics = calculate_collection_metrics(df)
-collection_summary = get_collection_summary(df)
-forecast = forecast_recovery(df, 30)
 
 # ================= SIDEBAR - FILTERS & INFO =================
 st.sidebar.header("🎯 Filters & Controls")
@@ -107,12 +207,23 @@ selected_risks = st.sidebar.multiselect(
 )
 
 # State filter
-states = sorted(df["State"].fillna("Unknown").astype(str).unique().tolist())
+states = sorted(list(set(df["State"].fillna("Unknown").astype(str).unique().tolist() + ["lead"])))
 selected_states = st.sidebar.multiselect(
     "Customer Status",
     states,
     default=states
 )
+
+# Location filter
+if "Location" in df.columns:
+    location_values = sorted(df["Location"].fillna("Unknown").astype(str).unique().tolist())
+    selected_locations = st.sidebar.multiselect(
+        "Location",
+        location_values,
+        default=location_values
+    )
+else:
+    selected_locations = None
 
 # Due date and days filters
 filter_by_due_date = st.sidebar.checkbox("Filter by Due Date", value=False)
@@ -135,11 +246,18 @@ contractor_mask = df["Assigned to contractor"].fillna("Unassigned").isin(selecte
 risk_mask = df["Risk_Category"].fillna("Unknown").isin(selected_risks)
 state_mask = df["State"].fillna("Unknown").isin(selected_states)
 
+location_mask = pd.Series(True, index=df.index)
+if selected_locations is not None:
+    location_mask = df["Location"].fillna("Unknown").isin(selected_locations)
+
 days_mask = pd.Series(True, index=df.index)
 if selected_days != (min_days, max_days):
     days_mask = df["Days_Until_Due"].between(selected_days[0], selected_days[1])
 
-filtered_df = df[contractor_mask & risk_mask & state_mask & days_mask]
+if len(selected_contractors) == 0 or len(selected_risks) == 0 or len(selected_states) == 0 or (selected_locations is not None and len(selected_locations) == 0):
+    filtered_df = df.iloc[0:0]
+else:
+    filtered_df = df[contractor_mask & risk_mask & state_mask & days_mask & location_mask]
 
 if filter_by_due_date:
     filtered_df = filtered_df[filtered_df["Charged until"].dt.date == due_date]
@@ -154,7 +272,17 @@ st.sidebar.info(f"""
 - Last updated: {df['Last token time'].max() if 'Last token time' in df.columns else 'Unknown'}
 """)
 
+# Recalculate metrics after filtering
+filtered_df = filtered_df.copy()
+daily_collection = calculate_daily_expected_collection(filtered_df)
+recovery = recovery_metrics(filtered_df)
+collection_metrics = calculate_collection_metrics(filtered_df)
+collection_summary = get_collection_summary(filtered_df)
+forecast = forecast_recovery(filtered_df, 30)
 health_score = get_portfolio_health_score(filtered_df)
+
+# Total loan amount
+total_loan = filtered_df['Payoff amount'].sum() if 'Payoff amount' in filtered_df.columns else 0
 
 # ================= KEY PERFORMANCE INDICATORS =================
 st.markdown("## 📈 Key Performance Indicators")
@@ -203,6 +331,48 @@ with col6:
         delta=f"{daily_collection['default_customers']} default customers"
     )
 
+st.markdown(f"**Total Loan Value:** MK {total_loan:,.0f}  |  **Locations Selected:** {len(selected_locations) if selected_locations is not None else 'N/A'}")
+
+kpi_summary = pd.DataFrame([
+    {
+        "KPI": "Total Customers",
+        "Value": f"{len(filtered_df):,}",
+        "Context": f"{len(df):,} records loaded"
+    },
+    {
+        "KPI": "Expected Monthly",
+        "Value": f"MK {collection_summary['monthly_expected']:,.0f}",
+        "Context": f"{collection_metrics['efficiency_percent']:.1f}% collection efficiency"
+    },
+    {
+        "KPI": "Outstanding",
+        "Value": f"MK {recovery['outstanding']:,.0f}",
+        "Context": f"{len(filtered_df[filtered_df['Risk_Category'].isin(['Critical', 'High Risk'])])} high-risk customers"
+    },
+    {
+        "KPI": "Due Today",
+        "Value": f"{daily_collection['expected_customers']:,}",
+        "Context": f"MK {daily_collection['expected_collection']:,.0f} expected"
+    },
+    {
+        "KPI": "Portfolio Health",
+        "Value": f"{health_score:.0f}/100",
+        "Context": f"{collection_summary['default_rate']:.1f}% default rate"
+    },
+    {
+        "KPI": "30-Day Forecast",
+        "Value": f"MK {forecast['forecast_30_days']:,.0f}",
+        "Context": f"{forecast['confidence_percent']:.0f}% confidence"
+    },
+])
+
+st.subheader("KPI Summary")
+st.dataframe(
+    kpi_summary,
+    use_container_width=True,
+    hide_index=True
+)
+
 # ================= MAIN DASHBOARD SECTIONS =================
 st.markdown("---")
 
@@ -216,58 +386,239 @@ with col1:
         values=risk_dist.values,
         names=risk_dist.index,
         hole=0.45,
-        color_discrete_map={
-            "On Track": "#2ecc71",
-            "Watchlist": "#f39c12",
-            "Medium Risk": "#e67e22",
-            "High Risk": "#e74c3c",
-            "Critical": "#c0392b"
-        }
+        color=risk_dist.index,
+        color_discrete_map=RISK_COLORS
     )
+    fig.update_traces(
+        textposition="inside",
+        textinfo="percent+label",
+        marker=dict(line=dict(color="#ffffff", width=2)),
+        hovertemplate="<b>%{label}</b><br>Customers: %{value:,}<br>Share: %{percent}<extra></extra>"
+    )
+    style_chart(fig, height=360, legend_orientation="v")
     st.plotly_chart(fig, use_container_width=True)
 
 with col2:
-    st.subheader("Collection Status")
-    status_data = {
-        "Expected": [collection_summary['monthly_expected']],
-        "Arrears": [collection_summary['total_arrears']]
-    }
-    fig = go.Figure(data=[
-        go.Bar(name="Expected", x=["Monthly"], y=[collection_summary['monthly_expected']]),
-        go.Bar(name="Arrears", x=["Monthly"], y=[collection_summary['total_arrears']])
-    ])
-    st.plotly_chart(fig, use_container_width=True)
+    st.subheader("Collection Trend")
+    if "Charged until" in filtered_df.columns:
+        collection_trend = (
+            filtered_df.groupby(filtered_df["Charged until"].dt.date)
+            .agg({
+                "Monthly_Payment": "sum",
+                "Expected_Arrears": "sum",
+                "Customer": "count"
+            })
+            .reset_index()
+            .sort_values(by="Charged until")
+            .rename(columns={"Customer": "Customer Count"})
+        )
+        if len(collection_trend) > 0:
+            fig = px.scatter(
+                collection_trend,
+                x="Charged until",
+                y="Expected_Arrears",
+                size="Customer Count",
+                color="Monthly_Payment",
+                custom_data=["Customer Count", "Monthly_Payment"],
+                color_continuous_scale=["#bbf7d0", "#22c55e", "#14532d"],
+                labels={
+                    "Charged until": "Due Date",
+                    "Expected_Arrears": "Expected Arrears",
+                    "Monthly_Payment": "Expected Monthly",
+                    "Customer Count": "Customers"
+                }
+            )
+            fig.update_layout(
+                xaxis_title="Due Date",
+                yaxis_title="Expected Arrears (MWK)",
+                xaxis_tickangle=-45,
+                coloraxis_colorbar=dict(title="Monthly")
+            )
+            fig.update_traces(
+                marker=dict(line=dict(color="#ffffff", width=1.5), sizemin=6),
+                opacity=0.88,
+                hovertemplate=(
+                    "<b>%{x}</b><br>"
+                    "Expected arrears: MK %{y:,.0f}<br>"
+                    "Expected monthly: MK %{customdata[1]:,.0f}<br>"
+                    "Customers: %{customdata[0]:,}<extra></extra>"
+                )
+            )
+            style_chart(fig, height=360)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No collection trend available for the current selection.")
+    else:
+        st.info("Charged until date is required for collection trend.")
 
 with col3:
     st.subheader("Due Date Trend")
     if "Charged until" in filtered_df.columns:
+        due_source = filtered_df.dropna(subset=["Charged until"]).copy()
+        due_source["Due_Date"] = due_source["Charged until"].dt.normalize()
+        due_source["Week_Start"] = due_source["Due_Date"] - pd.to_timedelta(due_source["Due_Date"].dt.weekday, unit="D")
+        due_source["Weekday"] = due_source["Due_Date"].dt.day_name().str[:3]
         due_counts = (
-            filtered_df.groupby(filtered_df["Charged until"].dt.date)
+            due_source.groupby(["Week_Start", "Weekday"])
             .size()
             .reset_index(name="Customer Count")
-            .sort_values(by="Charged until")
+            .sort_values(by="Week_Start")
         )
         if len(due_counts) > 0:
-            fig = px.line(
+            fig = px.density_heatmap(
                 due_counts,
-                x="Charged until",
-                y="Customer Count",
-                markers=True,
-                labels={"Charged until": "Due Date", "Customer Count": "Customers"}
+                x="Week_Start",
+                y="Weekday",
+                z="Customer Count",
+                histfunc="sum",
+                color_continuous_scale=["#f0fdf4", "#86efac", "#16a34a", "#14532d"],
+                category_orders={"Weekday": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]},
+                labels={
+                    "Week_Start": "Week Starting",
+                    "Weekday": "Due Day",
+                    "Customer Count": "Customers"
+                }
             )
+            fig.update_layout(
+                xaxis_title="Week Starting",
+                yaxis_title="Due Day",
+                xaxis_tickangle=-45,
+                coloraxis_colorbar=dict(title="Customers")
+            )
+            fig.update_traces(
+                hovertemplate="<b>%{y}</b><br>Week: %{x}<br>Customers: %{z:,}<extra></extra>"
+            )
+            style_chart(fig, height=360)
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No due-date trend available for the current selection.")
     else:
         st.info("Charged until date is required for due-date trend.")
 
+# Row 2: Additional visual analysis
+active_insights = filtered_df[filtered_df["State"].isin(["good", "active"])].copy() if "State" in filtered_df.columns else filtered_df.copy()
+
+insight_col3, insight_col4 = st.columns(2)
+
+with insight_col3:
+    st.markdown("**Top Contractors by Arrears**")
+    if len(active_insights) > 0 and {"Assigned to contractor", "Expected_Arrears"}.issubset(active_insights.columns):
+        top_arrears = (
+            active_insights
+            .groupby("Assigned to contractor", as_index=False)
+            .agg(
+                Expected_Arrears=("Expected_Arrears", "sum"),
+                Customers=("Customer", "count")
+            )
+            .sort_values("Expected_Arrears", ascending=False)
+            .head(10)
+        )
+        if len(top_arrears) > 0:
+            fig = px.bar(
+                top_arrears,
+                y="Assigned to contractor",
+                x="Expected_Arrears",
+                orientation="h",
+                text="Customers",
+                color="Expected_Arrears",
+                color_continuous_scale=["#bbf7d0", "#16a34a", "#14532d"],
+                labels={
+                    "Assigned to contractor": "Contractor",
+                    "Expected_Arrears": "Expected Arrears",
+                },
+            )
+            fig.update_traces(
+                marker_line_color="#ffffff",
+                marker_line_width=1,
+                texttemplate="%{text} customers",
+                textposition="outside",
+                hovertemplate="<b>%{y}</b><br>Arrears: MK %{x:,.0f}<br>%{text} customers<extra></extra>"
+            )
+            fig.update_layout(yaxis={"categoryorder": "total ascending"}, coloraxis_showscale=False)
+            style_chart(fig, height=420)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No contractor arrears available.")
+    else:
+        st.info("Contractor and arrears fields are required for this view.")
+
+with insight_col4:
+    st.markdown("**Customer Risk Scatter**")
+    if len(active_insights) > 0 and {"Days system off", "Expected_Arrears", "Risk_Category"}.issubset(active_insights.columns):
+        scatter_df = active_insights[
+            (active_insights["Expected_Arrears"] > 0) |
+            (active_insights["Days system off"] > 0)
+        ].copy()
+        if len(scatter_df) > 0:
+            fig = px.scatter(
+                scatter_df,
+                x="Days system off",
+                y="Expected_Arrears",
+                color="Risk_Category",
+                size="Weekly_Payment" if "Weekly_Payment" in scatter_df.columns else None,
+                hover_name="Customer" if "Customer" in scatter_df.columns else None,
+                hover_data=["Assigned to contractor"] if "Assigned to contractor" in scatter_df.columns else None,
+                color_discrete_map=RISK_COLORS,
+                labels={
+                    "Days system off": "Days System Off",
+                    "Expected_Arrears": "Expected Arrears",
+                    "Risk_Category": "Risk"
+                },
+            )
+            fig.update_traces(
+                marker=dict(line=dict(color="#ffffff", width=1), opacity=0.78),
+                hovertemplate="<b>%{hovertext}</b><br>Days off: %{x}<br>Arrears: MK %{y:,.0f}<extra></extra>"
+            )
+            style_chart(fig, height=420)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No overdue customers available for the current selection.")
+    else:
+        st.info("Days off, arrears, and risk fields are required for this view.")
+
+# Filtered customer list
+st.markdown("---")
+st.subheader("📋 Filtered Customers")
+if len(filtered_df) > 0:
+    display_cols = [
+        "Customer",
+        "Assigned to contractor",
+        "State",
+        "Risk_Category",
+        "Plan_Type",
+        "Payoff amount",
+        "Balance",
+        "Left to pay",
+        "Expected_Arrears",
+        "Days system off",
+        "Charged until",
+        "Location"
+    ]
+    display_cols = [col for col in display_cols if col in filtered_df.columns]
+    st.dataframe(
+        filtered_df[display_cols].sort_values(by=["Risk_Category", "Charged until"], ascending=[True, True]).style.format({
+            "Payoff amount": "MK {:,.0f}",
+            "Balance": "MK {:,.0f}",
+            "Left to pay": "MK {:,.0f}",
+            "Expected_Arrears": "MK {:,.0f}",
+            "Days system off": "{:.0f}"
+        }),
+        use_container_width=True
+    )
+else:
+    st.info("No customers match the current filter selection.")
+
 # Row 2: Customers per Due Date
 st.markdown("---")
 st.subheader("📅 Customers by Due Date")
 
 if "Charged until" in filtered_df.columns:
+    due_group_cols = [filtered_df["Charged until"].dt.date]
+    if "Risk_Category" in filtered_df.columns:
+        due_group_cols.append("Risk_Category")
+
     due_counts = (
-        filtered_df.groupby(filtered_df["Charged until"].dt.date)
+        filtered_df.groupby(due_group_cols)
         .size()
         .reset_index(name="Customer Count")
         .sort_values(by="Charged until")
@@ -277,15 +628,75 @@ if "Charged until" in filtered_df.columns:
             due_counts,
             x="Charged until",
             y="Customer Count",
-            labels={"Charged until": "Due Date", "Customer Count": "Customers"}
+            color="Risk_Category" if "Risk_Category" in due_counts.columns else None,
+            color_discrete_map=RISK_COLORS,
+            labels={
+                "Charged until": "Due Date",
+                "Customer Count": "Customers",
+                "Risk_Category": "Risk"
+            },
         )
+        fig.update_traces(
+            marker_line_color="#ffffff",
+            marker_line_width=1,
+            opacity=0.92,
+            hovertemplate="<b>%{x}</b><br>%{y:,} customers<extra></extra>"
+        )
+        fig.update_layout(
+            barmode="stack",
+            bargap=0.22,
+            xaxis_title="Due Date",
+            yaxis_title="Customers",
+            xaxis_tickangle=-45,
+        )
+        style_chart(fig, height=390)
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No customers available for the selected due date range.")
 else:
     st.info("Charged until date is required for due-date grouping.")
 
-# Row 3: Contractor Performance
+# Row 3: Plan Payment Trend
+st.markdown("---")
+st.subheader("📈 Plan Payment Trend")
+if "Charged until" in filtered_df.columns and "Plan_Type" in filtered_df.columns:
+    plan_trend = (
+        filtered_df.groupby([filtered_df["Charged until"].dt.date, "Plan_Type"])
+        .agg({"Monthly_Payment": "sum"})
+        .reset_index()
+        .sort_values(by=["Charged until", "Plan_Type"])
+    )
+    if len(plan_trend) > 0:
+        fig = px.bar(
+            plan_trend,
+            x="Charged until",
+            y="Monthly_Payment",
+            color="Plan_Type",
+            text="Monthly_Payment",
+            color_discrete_sequence=[CHART_COLORS["primary"], CHART_COLORS["secondary"]],
+            labels={
+                "Charged until": "Due Date",
+                "Monthly_Payment": "Monthly Payment",
+                "Plan_Type": "Plan"
+            }
+        )
+        fig.update_traces(
+            marker_line_color="#ffffff",
+            marker_line_width=1,
+            opacity=0.92,
+            texttemplate="MK %{y:,.0f}",
+            textposition="outside",
+            hovertemplate="<b>%{x}</b><br>MK %{y:,.0f}<extra></extra>"
+        )
+        fig.update_layout(barmode="group", bargap=0.22)
+        style_chart(fig, height=390)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No plan payment trend data available for the current selection.")
+else:
+    st.info("Plan payment trend requires Charged until dates and plan type.")
+
+# Row 4: Contractor Performance
 st.markdown("---")
 st.subheader("🏢 Contractor Performance")
 
@@ -355,6 +766,26 @@ st.dataframe(
     }),
     use_container_width=True
 )
+
+forecast_plot_df = scenario_df.melt(id_vars=["Scenario"], value_vars=["Weekly", "Monthly"],
+                                    var_name="Period", value_name="Amount")
+fig = px.bar(
+    forecast_plot_df,
+    x="Scenario",
+    y="Amount",
+    color="Period",
+    color_discrete_sequence=[CHART_COLORS["primary"], CHART_COLORS["accent"]],
+    labels={"Amount": "MK", "Scenario": "Scenario", "Period": "Projection"},
+)
+fig.update_traces(
+    marker_line_color="#ffffff",
+    marker_line_width=1,
+    opacity=0.92,
+    hovertemplate="<b>%{x}</b><br>MK %{y:,.0f}<extra></extra>"
+)
+fig.update_layout(barmode="group", bargap=0.22)
+style_chart(fig, height=380)
+st.plotly_chart(fig, use_container_width=True)
 
 # Row 5: Critical Cases
 st.markdown("---")

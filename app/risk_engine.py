@@ -26,16 +26,16 @@ def apply_risk_logic(df):
             if pd.isna(days):
                 return "Unknown"
             days = int(days)
-            if days >= 365:
-                return "Critical"
-            elif days >= 180:
-                return "High Risk"
-            elif days >= 90:
-                return "Medium Risk"
-            elif days >= 30:
-                return "Watchlist"
+            if days >= 76:
+                return "76+ days"
+            elif days >= 61:
+                return "61-75 days"
+            elif days >= 46:
+                return "46-60 days"
+            elif days >= 31:
+                return "31-45 days"
             else:
-                return "On Track"
+                return "0-30 days"
         
         df["Risk_Category"] = df["Days system off"].fillna(0).apply(categorize_risk)
     
@@ -44,11 +44,11 @@ def apply_risk_logic(df):
         if pd.isna(days):
             return ""
         days = int(days)
-        if days >= 180:
+        if days >= 76:
             return "!!!"
-        elif days >= 90:
+        elif days >= 61:
             return "!!"
-        elif days >= 30:
+        elif days >= 31:
             return "!"
         return ""
     
@@ -57,16 +57,16 @@ def apply_risk_logic(df):
     # Risk score (0-100)
     df["Risk_Score"] = 0
     for idx, row in df.iterrows():
-        if row["Risk_Category"] == "On Track":
+        if row["Risk_Category"] == "0-30 days":
             df.loc[idx, "Risk_Score"] = 10
-        elif row["Risk_Category"] == "Watchlist":
+        elif row["Risk_Category"] == "31-45 days":
             df.loc[idx, "Risk_Score"] = 30
-        elif row["Risk_Category"] == "Medium Risk":
-            df.loc[idx, "Risk_Score"] = 60
-        elif row["Risk_Category"] == "High Risk":
-            df.loc[idx, "Risk_Score"] = 80
-        elif row["Risk_Category"] == "Critical":
-            df.loc[idx, "Risk_Score"] = 95
+        elif row["Risk_Category"] == "46-60 days":
+            df.loc[idx, "Risk_Score"] = 50
+        elif row["Risk_Category"] == "61-75 days":
+            df.loc[idx, "Risk_Score"] = 70
+        elif row["Risk_Category"] == "76+ days":
+            df.loc[idx, "Risk_Score"] = 90
     
     return df
 

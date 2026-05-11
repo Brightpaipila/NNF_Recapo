@@ -48,6 +48,19 @@ def generate_expected_metrics(df, current_date=None):
     
     df = df.copy()
     
+    # Normalize raw export field names
+    df.columns = df.columns.str.strip()
+    rename_map = {
+        "Pay off amount": "Payoff amount",
+        "Percentage paid off": "Percentage paid",
+        "Sales price": "Sales price",
+        "Days system off": "Days system off",
+        "Assigned to contractor": "Assigned to contractor",
+        "Left to pay": "Left to pay",
+        "Charged until": "Charged until"
+    }
+    df = df.rename(columns=rename_map)
+
     # Detect plan type from Sales price column
     if "Sales price" in df.columns:
         df["Plan_Type"] = df["Sales price"].apply(detect_plan)
@@ -123,6 +136,12 @@ def generate_expected_metrics(df, current_date=None):
                     df.loc[idx, "Expected Status"] = "On Track"
                 else:
                     df.loc[idx, "Expected Status"] = "At Risk"
+
+    # Mark completed loans explicitly
+    if "State" in df.columns:
+        completed_mask = df["State"] == "paid_off"
+        df.loc[completed_mask, "Risk_Category"] = "Completed"
+        df.loc[completed_mask, "Expected Status"] = "Completed"
     
     return df
 
