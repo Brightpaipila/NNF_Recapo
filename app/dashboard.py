@@ -547,7 +547,7 @@ st.dataframe(
 st.markdown("---")
 
 # Row 1: Risk Distribution, Collection, and Trend
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns([1.25, 1.6, 1.6])
 
 with col1:
     st.subheader("Risk Distribution")
@@ -562,10 +562,12 @@ with col1:
     fig.update_traces(
         textposition="inside",
         textinfo="percent+label",
-        marker=dict(line=dict(color="#ffffff", width=2)),
+        marker=dict(line=dict(color="#ffffff", width=4)),
+        pull=[0.02] * len(risk_dist),
         hovertemplate="<b>%{label}</b><br>Customers: %{value:,}<br>Share: %{percent}<extra></extra>"
     )
-    style_chart(fig, height=360, legend_orientation="v")
+    style_chart(fig, height=520, legend_orientation="v")
+    fig.update_layout(margin=dict(l=8, r=8, t=24, b=8))
     st.plotly_chart(fig, use_container_width=True)
 
 with col2:
@@ -614,7 +616,7 @@ with col2:
                     "Customers: %{customdata[0]:,}<extra></extra>"
                 )
             )
-            style_chart(fig, height=360)
+            style_chart(fig, height=480)
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No collection trend available for the current selection.")
@@ -658,7 +660,7 @@ with col3:
             fig.update_traces(
                 hovertemplate="<b>%{y}</b><br>Week: %{x}<br>Customers: %{z:,}<extra></extra>"
             )
-            style_chart(fig, height=360)
+            style_chart(fig, height=480)
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No due-date trend available for the current selection.")
@@ -876,6 +878,7 @@ if len(contractors_perf) > 0:
         contractors_perf.style.format({
             "expected_total": "MK {:,.0f}",
             "collected_total": "MK {:,.0f}",
+            "financed_total": "MK {:,.0f}",
             "efficiency_percent": "{:.1f}%"
         }),
         use_container_width=True
