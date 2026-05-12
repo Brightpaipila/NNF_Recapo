@@ -411,6 +411,44 @@ selected_days = st.sidebar.slider(
     value=(min_days, max_days)
 )
 
+if "Days system off" in df.columns:
+    system_off_values = (
+        pd.to_numeric(df["Days system off"], errors="coerce")
+        .fillna(0)
+        .clip(lower=0)
+        .astype(int)
+    )
+    max_system_off = int(system_off_values.max()) if len(system_off_values) > 0 else 0
+    system_off_filter = st.sidebar.radio(
+        "Days System Off",
+        ["All", "Range", "Specific days"],
+        horizontal=True
+    )
+
+    if system_off_filter == "Range":
+        selected_system_off_range = st.sidebar.slider(
+            "Days System Off Range",
+            min_value=0,
+            max_value=max_system_off,
+            value=(0, max_system_off)
+        )
+        selected_system_off_days = []
+    elif system_off_filter == "Specific days":
+        available_system_off_days = sorted(system_off_values.unique().tolist())
+        selected_system_off_days = st.sidebar.multiselect(
+            "Select Days System Off",
+            available_system_off_days,
+            default=available_system_off_days
+        )
+        selected_system_off_range = (0, max_system_off)
+    else:
+        selected_system_off_range = (0, max_system_off)
+        selected_system_off_days = []
+else:
+    system_off_filter = "All"
+    selected_system_off_range = (0, 0)
+    selected_system_off_days = []
+
 # Apply filters
 contractor_mask = df["Assigned to contractor"].fillna("Unassigned").isin(selected_contractors)
 risk_mask = df["Risk_Category"].fillna("Unknown").isin(selected_risks)
@@ -424,10 +462,28 @@ days_mask = pd.Series(True, index=df.index)
 if selected_days != (min_days, max_days):
     days_mask = df["Days_Until_Due"].between(selected_days[0], selected_days[1])
 
-if len(selected_contractors) == 0 or len(selected_risks) == 0 or len(selected_states) == 0 or (selected_locations is not None and len(selected_locations) == 0):
+system_off_mask = pd.Series(True, index=df.index)
+if "Days system off" in df.columns:
+    system_off_series = (
+        pd.to_numeric(df["Days system off"], errors="coerce")
+        .fillna(0)
+        .clip(lower=0)
+        .astype(int)
+    )
+    if system_off_filter == "Range":
+        system_off_mask = system_off_series.between(
+            selected_system_off_range[0],
+            selected_system_off_range[1]
+        )
+    elif system_off_filter == "Specific days":
+        system_off_mask = system_off_series.isin(selected_system_off_days)
+
+empty_system_off_selection = system_off_filter == "Specific days" and len(selected_system_off_days) == 0
+
+if len(selected_contractors) == 0 or len(selected_risks) == 0 or len(selected_states) == 0 or empty_system_off_selection or (selected_locations is not None and len(selected_locations) == 0):
     filtered_df = df.iloc[0:0]
 else:
-    filtered_df = df[contractor_mask & risk_mask & state_mask & days_mask & location_mask]
+    filtered_df = df[contractor_mask & risk_mask & state_mask & days_mask & location_mask & system_off_mask]
 
 if filter_by_due_date:
     filtered_df = filtered_df[filtered_df["Charged until"].dt.date == due_date]
@@ -453,6 +509,23 @@ health_score = get_portfolio_health_score(filtered_df)
 
 # Total loan amount
 total_loan = filtered_df['Payoff amount'].sum() if 'Payoff amount' in filtered_df.columns else 0
+
+today_utc = pd.Timestamp.now("UTC").normalize()
+if {"Charged until", "Expected_Arrears"}.issubset(filtered_df.columns):
+    active_due_mask = pd.Series(True, index=filtered_df.index)
+    if "State" in filtered_df.columns:
+        active_due_mask = filtered_df["State"].isin(["good", "active"])
+
+    due_and_overdue = filtered_df[
+        active_due_mask &
+        filtered_df["Charged until"].notna() &
+        (filtered_df["Charged until"] <= today_utc)
+    ]
+    due_and_overdue_expected = due_and_overdue["Expected_Arrears"].sum()
+    due_and_overdue_count = len(due_and_overdue)
+else:
+    due_and_overdue_expected = 0
+    due_and_overdue_count = 0
 
 # ================= KEY PERFORMANCE INDICATORS =================
 st.markdown("## 📈 Key Performance Indicators")
@@ -523,6 +596,11 @@ kpi_summary = pd.DataFrame([
         "KPI": "Due Today",
         "Value": f"{daily_collection['expected_customers']:,}",
         "Context": f"MK {daily_collection['expected_collection']:,.0f} expected"
+    },
+    {
+        "KPI": "Due & Overdue Expected",
+        "Value": f"MK {due_and_overdue_expected:,.0f}",
+        "Context": f"{due_and_overdue_count:,} customers due today or earlier"
     },
     {
         "KPI": "Portfolio Health",
