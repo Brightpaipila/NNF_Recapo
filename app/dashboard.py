@@ -826,6 +826,28 @@ with insight_col4:
     else:
         st.info("Days off, arrears, and risk fields are required for this view.")
 
+# Daily Money Rise Chart
+st.subheader("📈 Daily Money Rise")
+if "Charged until" in filtered_df.columns and "Monthly_Payment" in filtered_df.columns:
+    daily_sums = filtered_df.groupby(filtered_df["Charged until"].dt.date)["Monthly_Payment"].sum().reset_index()
+    daily_sums = daily_sums.sort_values("Charged until")
+    daily_sums["Rise"] = daily_sums["Monthly_Payment"].diff().fillna(0)
+    
+    if len(daily_sums) > 1:
+        fig = px.bar(
+            daily_sums,
+            x="Charged until",
+            y="Rise",
+            title="Daily Money Rise (Day-over-Day Changes in Monthly Payments)",
+            labels={"Rise": "Daily Rise (MK)", "Charged until": "Date"}
+        )
+        style_chart(fig, height=400)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Not enough data points for daily rise calculation.")
+else:
+    st.info("Required fields (Charged until, Monthly_Payment) not available.")
+
 # Filtered customer list
 st.markdown("---")
 st.subheader("📋 Filtered Customers")
