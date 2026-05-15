@@ -395,6 +395,17 @@ if "Location" in df.columns:
 else:
     selected_locations = None
 
+# Year filter
+if "Handover at" in df.columns:
+    year_values = sorted(df["Handover at"].dt.year.dropna().astype(int).unique().tolist())
+    selected_years = st.sidebar.multiselect(
+        "Year",
+        year_values,
+        default=year_values
+    )
+else:
+    selected_years = None
+
 # Due date and days filters
 filter_by_due_date = st.sidebar.checkbox("Filter by Due Date", value=False)
 due_date = st.sidebar.date_input(
@@ -478,12 +489,16 @@ if "Days system off" in df.columns:
     elif system_off_filter == "Specific days":
         system_off_mask = system_off_series.isin(selected_system_off_days)
 
+year_mask = pd.Series(True, index=df.index)
+if selected_years is not None and "Handover at" in df.columns:
+    year_mask = df["Handover at"].dt.year.isin(selected_years)
+
 empty_system_off_selection = system_off_filter == "Specific days" and len(selected_system_off_days) == 0
 
-if len(selected_contractors) == 0 or len(selected_risks) == 0 or len(selected_states) == 0 or empty_system_off_selection or (selected_locations is not None and len(selected_locations) == 0):
+if len(selected_contractors) == 0 or len(selected_risks) == 0 or len(selected_states) == 0 or empty_system_off_selection or (selected_locations is not None and len(selected_locations) == 0) or (selected_years is not None and len(selected_years) == 0):
     filtered_df = df.iloc[0:0]
 else:
-    filtered_df = df[contractor_mask & risk_mask & state_mask & days_mask & location_mask & system_off_mask]
+    filtered_df = df[contractor_mask & risk_mask & state_mask & days_mask & location_mask & system_off_mask & year_mask]
 
 if filter_by_due_date:
     filtered_df = filtered_df[filtered_df["Charged until"].dt.date == due_date]
@@ -530,7 +545,7 @@ else:
 # ================= KEY PERFORMANCE INDICATORS =================
 st.markdown("## 📈 Key Performance Indicators")
 
-col1, col2, col3, col4, col5, col6 = st.columns(6)
+col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 
 with col1:
     st.metric(
@@ -548,26 +563,33 @@ with col2:
 
 with col3:
     st.metric(
-        "📊 Outstanding",
-        f"MK {recovery['outstanding']:,.0f}",
+        "📊 Outstanding Balance",
+        f"MK {collection_summary['total_outstanding']:,.0f}",
         delta=f"{len(df[df['Risk_Category'].isin(['Critical', 'High Risk'])])} at risk"
     )
 
 with col4:
+    st.metric(
+        "💰 Total Loan Value",
+        f"MK {total_loan:,.0f}",
+        delta="Payoff amount total"
+    )
+
+with col5:
     st.metric(
         "⏰ Due Today",
         f"{daily_collection['expected_customers']}",
         delta=f"MK {daily_collection['expected_collection']:,.0f}"
     )
 
-with col5:
+with col6:
     st.metric(
         "🏥 Portfolio Health",
         f"{health_score:.0f}/100",
         delta=f"{collection_summary['default_rate']:.1f}% default"
     )
 
-with col6:
+with col7:
     st.metric(
         "⚠️ Default Rate",
         f"{collection_summary['default_rate']:.1f}%",
@@ -589,8 +611,13 @@ kpi_summary = pd.DataFrame([
     },
     {
         "KPI": "Outstanding",
-        "Value": f"MK {recovery['outstanding']:,.0f}",
+        "Value": f"MK {collection_summary['total_outstanding']:,.0f}",
         "Context": f"{len(filtered_df[filtered_df['Risk_Category'].isin(['Critical', 'High Risk'])])} high-risk customers"
+    },
+    {
+        "KPI": "Total Loan Value",
+        "Value": f"MK {total_loan:,.0f}",
+        "Context": "Payoff amount total"
     },
     {
         "KPI": "Due Today",

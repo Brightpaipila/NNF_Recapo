@@ -57,7 +57,8 @@ def generate_expected_metrics(df, current_date=None):
         "Days system off": "Days system off",
         "Assigned to contractor": "Assigned to contractor",
         "Left to pay": "Left to pay",
-        "Charged until": "Charged until"
+        "Charged until": "Charged until",
+        "Handover at": "Handover at"
     }
     df = df.rename(columns=rename_map)
 
@@ -73,6 +74,9 @@ def generate_expected_metrics(df, current_date=None):
     
     if "Last token time" in df.columns:
         df["Last token time"] = pd.to_datetime(df["Last token time"], errors="coerce", utc=True)
+    
+    if "Handover at" in df.columns:
+        df["Handover at"] = pd.to_datetime(df["Handover at"], errors="coerce", utc=True)
     
     # Initialize expected collection columns
     df["Weekly_Payment"] = 0.0
