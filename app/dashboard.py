@@ -29,13 +29,26 @@ from forecasting import forecast_recovery, scenario_analysis
 
 # ================= PAGE CONFIG =================
 st.set_page_config(
-    page_title="RECAPO Intelligence",
+    page_title="RECAPO Intelligence System",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.title("📊 RECAPO Recovery Intelligence System")
-st.markdown("Real-time collection analytics & payment forecast engine")
+# Add logo
+logo_path = Path(__file__).parent.parent / "data" / "Recapo Logo.png"
+if logo_path.exists():
+    # Add some vertical spacing to move logo down
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([0.5, 4])
+    with col1:
+        st.image(str(logo_path), width=100)
+    with col2:
+        st.title("RECAPO - NNNF")
+        st.markdown("Real-time collection analytics")
+else:
+    st.title("RECAPO Intelligence System")
+    st.markdown("Real-time collection analytics engine")
 
 # ================= VISUAL THEME =================
 CHART_TEMPLATE = "plotly_white"
