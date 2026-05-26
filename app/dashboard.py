@@ -7,7 +7,7 @@ Real-time collection recovery analytics and forecasting
 import sys
 from pathlib import Path
 from io import BytesIO
-from tkinter import Image
+#from tkinter import Image
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
