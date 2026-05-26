@@ -7,6 +7,7 @@ Real-time collection recovery analytics and forecasting
 import sys
 from pathlib import Path
 from io import BytesIO
+from tkinter import Image
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -28,8 +29,11 @@ from due_engine import daily_due_customers, get_urgent_followups, get_payment_sc
 from forecasting import forecast_recovery, scenario_analysis
 
 # ================= PAGE CONFIG =================
+from PIL import Image
+logo = Image.open("data/Recapo Logo.png")
 st.set_page_config(
     page_title="RECAPO Intelligence System",
+    page_icon=logo,
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -45,10 +49,10 @@ if logo_path.exists():
         st.image(str(logo_path), width=100)
     with col2:
         st.title("RECAPO - NNNF")
-        st.markdown("Real-time collection analytics")
+        st.markdown("Real-time analytics")
 else:
     st.title("RECAPO Intelligence System")
-    st.markdown("Real-time collection analytics")
+    st.markdown("Real-time analytics")
 
 # ================= VISUAL THEME =================
 CHART_TEMPLATE = "plotly_white"
