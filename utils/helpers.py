@@ -294,7 +294,7 @@ def build_duplicate_phones_table(
 
     display_columns = [
         "Customer phone numbers",
-        "Customer",
+        "Customer ",
         "Assigned to contractor",
         "State",
         "System",
