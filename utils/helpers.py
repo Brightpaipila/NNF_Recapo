@@ -359,8 +359,8 @@ def build_duplicate_names_table(
 
     display_columns = [
         "Duplicate Type",
-        "Customer Name",
-        "Phone Number",
+        "Customer",
+        "Customer phone numbers",
         "Assigned to contractor",
         "State",
         "System",
