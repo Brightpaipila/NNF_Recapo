@@ -1,8 +1,11 @@
 import pandas as pd
 import numpy as np
+import re
 from datetime import datetime
+from difflib import SequenceMatcher
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 # Add parent to path for imports
 root = Path(__file__).parent.parent
@@ -145,3 +148,299 @@ def get_payment_schedule_info(plan_type, charged_until_date, current_date=None):
         "is_payment_due": is_due,
         "payment_frequency": plan.get("payment_frequency")
     }
+
+
+def normalize_text(value: object) -> str:
+    """Normalize text for duplicate matching."""
+    if pd.isna(value):
+        return ""
+    text = str(value).lower().strip()
+    text = re.sub(r"[^a-z0-9\s]", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def normalize_phone(value: object) -> str:
+    """Normalize phone numbers for duplicate detection."""
+    if pd.isna(value):
+        return ""
+    text = str(value)
+    return re.sub(r"[^0-9]", "", text)
+
+
+def safe_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    """Find the best matching column name from the dataframe."""
+    lower_columns = {col.lower().strip(): col for col in df.columns}
+    for candidate in candidates:
+        candidate_key = candidate.lower().strip()
+        if candidate_key in lower_columns:
+            return lower_columns[candidate_key]
+    for col in df.columns:
+        lower_col = col.lower()
+        if any(candidate.lower().strip() in lower_col for candidate in candidates):
+            return col
+    return None
+
+
+def build_duplicate_audit_table(
+    df: pd.DataFrame,
+    customer_column: Optional[str] = None,
+    phone_column: Optional[str] = None,
+    contractor_column: Optional[str] = None,
+) -> pd.DataFrame:
+    """Build a duplicate audit table for similar customer records."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    customer_column = customer_column or safe_column(df, ["customer", "customer name"])
+    phone_column = phone_column or safe_column(df, ["phone", "phone number", "customer phone", "mobile", "mobile number", "telephone"])
+    contractor_column = contractor_column or safe_column(df, ["assigned to contractor", "contractor", "agent", "dsa"])
+
+    display_columns = [
+        "Duplicate Field",
+        "Duplicate Value",
+        "Customer Name",
+        "Phone Number",
+        "Assigned to contractor",
+        "State",
+        "Balance",
+        "Left to pay",
+        "Days system off",
+        "Location area 1",
+        "Location area 2",
+        "Location address",
+    ]
+
+    duplicate_rows = []
+
+    def add_duplicate_entries(rows: pd.DataFrame, field: str, value: str):
+        for _, row in rows.iterrows():
+            duplicate_rows.append(
+                {
+                    "Duplicate Field": field,
+                    "Duplicate Value": value,
+                    "Customer Name": row.get(customer_column, "") if customer_column else "",
+                    "Phone Number": row.get(phone_column, "") if phone_column else "",
+                    "Assigned to contractor": row.get(contractor_column, "") if contractor_column else "",
+                    "State": row.get("State", ""),
+                    "Balance": row.get("Balance", ""),
+                    "Left to pay": row.get("Left to pay", ""),
+                    "Days system off": row.get("Days system off", ""),
+                    "Location area 1": row.get("Location area 1", ""),
+                    "Location area 2": row.get("Location area 2", ""),
+                    "Location address": row.get("Location address", ""),
+                }
+            )
+
+    if phone_column:
+        df["_norm_phone"] = df[phone_column].apply(normalize_phone)
+        phone_counts = df["_norm_phone"].value_counts()
+        duplicate_phone_values = phone_counts[phone_counts > 1].index.tolist()
+        if duplicate_phone_values:
+            phone_dups = df[df["_norm_phone"].isin(duplicate_phone_values)].copy()
+            for phone_value in duplicate_phone_values:
+                rows = phone_dups[phone_dups["_norm_phone"] == phone_value]
+                add_duplicate_entries(rows, "Phone Number", rows.iloc[0].get(phone_column, ""))
+
+    if customer_column:
+        df["_norm_name"] = df[customer_column].apply(normalize_text)
+        name_counts = df["_norm_name"].value_counts()
+        duplicate_name_values = name_counts[name_counts > 1].index.tolist()
+        if duplicate_name_values:
+            name_dups = df[df["_norm_name"].isin(duplicate_name_values)].copy()
+            for name_value in duplicate_name_values:
+                rows = name_dups[name_dups["_norm_name"] == name_value]
+                add_duplicate_entries(rows, "Customer Name", rows.iloc[0].get(customer_column, ""))
+
+        unique_names = df["_norm_name"].dropna().unique().tolist()
+        similar_pairs = []
+        for i in range(len(unique_names)):
+            for j in range(i + 1, len(unique_names)):
+                name_a = unique_names[i]
+                name_b = unique_names[j]
+                if not name_a or not name_b:
+                    continue
+                if name_a.split(" ")[0] != name_b.split(" ")[0]:
+                    continue
+                ratio = SequenceMatcher(None, name_a, name_b).ratio()
+                if ratio >= 0.72:
+                    similar_pairs.append((name_a, name_b))
+
+        for name_a, name_b in similar_pairs:
+            rows = df[df["_norm_name"].isin([name_a, name_b])].copy()
+            add_duplicate_entries(rows, "Similar Customer Name", f"{name_a} <> {name_b}")
+
+    if not duplicate_rows:
+        return pd.DataFrame(columns=display_columns)
+
+    duplicate_df = pd.DataFrame(duplicate_rows)
+    duplicate_df = duplicate_df.drop_duplicates().reset_index(drop=True)
+    return duplicate_df.reindex(columns=display_columns).fillna("")
+
+
+def build_duplicate_phones_table(
+    df: pd.DataFrame,
+    phone_column: Optional[str] = None,
+    customer_column: Optional[str] = None,
+    contractor_column: Optional[str] = None,
+) -> pd.DataFrame:
+    """Build a duplicate audit table for duplicate phone numbers only."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    phone_column = phone_column or safe_column(df, ["phone", "phone number", "customer phone", "mobile", "mobile number", "telephone"])
+    customer_column = customer_column or safe_column(df, ["customer", "customer name"])
+    contractor_column = contractor_column or safe_column(df, ["assigned to contractor", "contractor", "agent", "dsa"])
+
+    display_columns = [
+        "Phone Number",
+        "Customer Name",
+        "Assigned to contractor",
+        "State",
+        "System",
+        "Balance",
+        "Left to pay",
+        "Days system off",
+        "Location area 1",
+        "Location area 2",
+        "Location address",
+    ]
+
+    duplicate_rows = []
+
+    if phone_column:
+        df = df.copy()
+        df["_norm_phone"] = df[phone_column].apply(normalize_phone)
+        phone_counts = df["_norm_phone"].value_counts()
+        duplicate_phone_values = phone_counts[phone_counts > 1].index.tolist()
+        
+        if duplicate_phone_values:
+            phone_dups = df[df["_norm_phone"].isin(duplicate_phone_values)].copy()
+            for phone_value in duplicate_phone_values:
+                rows = phone_dups[phone_dups["_norm_phone"] == phone_value]
+                for _, row in rows.iterrows():
+                    duplicate_rows.append(
+                        {
+                            "Phone Number": row.get(phone_column, "") if phone_column else "",
+                            "Customer Name": row.get(customer_column, "") if customer_column else "",
+                            "Assigned to contractor": row.get(contractor_column, "") if contractor_column else "",
+                            "State": row.get("State", ""),
+                            "System": row.get("System", ""),
+                            "Balance": row.get("Balance", ""),
+                            "Left to pay": row.get("Left to pay", ""),
+                            "Days system off": row.get("Days system off", ""),
+                            "Location area 1": row.get("Location area 1", ""),
+                            "Location area 2": row.get("Location area 2", ""),
+                            "Location address": row.get("Location address", ""),
+                        }
+                    )
+
+    if not duplicate_rows:
+        return pd.DataFrame(columns=display_columns)
+
+    duplicate_df = pd.DataFrame(duplicate_rows)
+    duplicate_df = duplicate_df.drop_duplicates().reset_index(drop=True)
+    return duplicate_df.reindex(columns=display_columns).fillna("")
+
+
+def build_duplicate_names_table(
+    df: pd.DataFrame,
+    customer_column: Optional[str] = None,
+    phone_column: Optional[str] = None,
+    contractor_column: Optional[str] = None,
+) -> pd.DataFrame:
+    """Build a duplicate audit table for duplicate/similar customer names only."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    customer_column = customer_column or safe_column(df, ["customer", "customer name"])
+    phone_column = phone_column or safe_column(df, ["phone", "phone number", "customer phone", "mobile", "mobile number", "telephone"])
+    contractor_column = contractor_column or safe_column(df, ["assigned to contractor", "contractor", "agent", "dsa"])
+
+    display_columns = [
+        "Duplicate Type",
+        "Customer Name",
+        "Phone Number",
+        "Assigned to contractor",
+        "State",
+        "System",
+        "Balance",
+        "Left to pay",
+        "Days system off",
+        "Location area 1",
+        "Location area 2",
+        "Location address",
+    ]
+
+    duplicate_rows = []
+
+    if customer_column:
+        df = df.copy()
+        df["_norm_name"] = df[customer_column].apply(normalize_text)
+        
+        # Exact matches
+        name_counts = df["_norm_name"].value_counts()
+        duplicate_name_values = name_counts[name_counts > 1].index.tolist()
+        if duplicate_name_values:
+            name_dups = df[df["_norm_name"].isin(duplicate_name_values)].copy()
+            for name_value in duplicate_name_values:
+                rows = name_dups[name_dups["_norm_name"] == name_value]
+                for _, row in rows.iterrows():
+                    duplicate_rows.append(
+                        {
+                            "Duplicate Type": "Exact Match",
+                            "Customer Name": row.get(customer_column, "") if customer_column else "",
+                            "Phone Number": row.get(phone_column, "") if phone_column else "",
+                            "Assigned to contractor": row.get(contractor_column, "") if contractor_column else "",
+                            "State": row.get("State", ""),
+                            "System": row.get("System", ""),
+                            "Balance": row.get("Balance", ""),
+                            "Left to pay": row.get("Left to pay", ""),
+                            "Days system off": row.get("Days system off", ""),
+                            "Location area 1": row.get("Location area 1", ""),
+                            "Location area 2": row.get("Location area 2", ""),
+                            "Location address": row.get("Location address", ""),
+                        }
+                    )
+
+        # Similar matches (by first name and similarity ratio)
+        unique_names = df["_norm_name"].dropna().unique().tolist()
+        similar_pairs = []
+        for i in range(len(unique_names)):
+            for j in range(i + 1, len(unique_names)):
+                name_a = unique_names[i]
+                name_b = unique_names[j]
+                if not name_a or not name_b:
+                    continue
+                if name_a.split(" ")[0] != name_b.split(" ")[0]:
+                    continue
+                ratio = SequenceMatcher(None, name_a, name_b).ratio()
+                if ratio >= 0.72:
+                    similar_pairs.append((name_a, name_b))
+
+        for name_a, name_b in similar_pairs:
+            rows = df[df["_norm_name"].isin([name_a, name_b])].copy()
+            for _, row in rows.iterrows():
+                duplicate_rows.append(
+                    {
+                        "Duplicate Type": "Similar Name",
+                        "Customer Name": row.get(customer_column, "") if customer_column else "",
+                        "Phone Number": row.get(phone_column, "") if phone_column else "",
+                        "Assigned to contractor": row.get(contractor_column, "") if contractor_column else "",
+                        "State": row.get("State", ""),
+                        "System": row.get("System", ""),
+                        "Balance": row.get("Balance", ""),
+                        "Left to pay": row.get("Left to pay", ""),
+                        "Days system off": row.get("Days system off", ""),
+                        "Location area 1": row.get("Location area 1", ""),
+                        "Location area 2": row.get("Location area 2", ""),
+                        "Location address": row.get("Location address", ""),
+                    }
+                )
+
+    if not duplicate_rows:
+        return pd.DataFrame(columns=display_columns)
+
+    duplicate_df = pd.DataFrame(duplicate_rows)
+    duplicate_df = duplicate_df.drop_duplicates().reset_index(drop=True)
+    return duplicate_df.reindex(columns=display_columns).fillna("")

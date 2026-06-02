@@ -16,17 +16,18 @@ import plotly.express as px
 root = Path(__file__).parent.parent
 sys.path.insert(0, str(root))
 
-from expected_engine import (
-    generate_expected_metrics, 
+from app.expected_engine import (
+    generate_expected_metrics,
     calculate_daily_expected_collection,
-    get_collection_summary
+    get_collection_summary,
 )
-from collection_engine import calculate_collection_metrics, get_all_contractors_collection
-from risk_engine import apply_risk_logic, get_risk_distribution, get_portfolio_health_score
-from recovery_engine import recovery_metrics, get_critical_cases
-from agent_analytics import contractor_performance, get_top_performers
-from due_engine import daily_due_customers, get_urgent_followups, get_payment_schedule_summary
-from forecasting import forecast_recovery, scenario_analysis
+from app.collection_engine import calculate_collection_metrics, get_all_contractors_collection
+from app.risk_engine import apply_risk_logic, get_risk_distribution, get_portfolio_health_score
+from app.recovery_engine import recovery_metrics, get_critical_cases
+from app.agent_analytics import contractor_performance, get_top_performers
+from app.due_engine import daily_due_customers, get_urgent_followups, get_payment_schedule_summary
+from app.forecasting import forecast_recovery, scenario_analysis
+from utils.helpers import build_duplicate_phones_table, build_duplicate_names_table
 
 # ================= PAGE CONFIG =================
 from PIL import Image
@@ -632,6 +633,55 @@ st.dataframe(
     hide_index=True
 )
 
+# Duplicate audit tables
+duplicate_phones_df = build_duplicate_phones_table(df)
+duplicate_names_df = build_duplicate_names_table(df)
+
+st.markdown("---")
+st.subheader("🔍 Duplicate Audit")
+
+# Phone duplicates section
+st.markdown("#### Duplicate Phone Numbers")
+if len(duplicate_phones_df) > 0:
+    st.markdown(
+        "Customers with the same phone number. These records may represent the same person or account."
+    )
+    col1, col2 = st.columns([0.2, 0.8])
+    with col1:
+        csv_data = duplicate_phones_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download (CSV)",
+            data=csv_data,
+            file_name=f"duplicate_phones_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            key="duplicate_phones_download"
+        )
+    st.dataframe(duplicate_phones_df, use_container_width=True)
+else:
+    st.info("No duplicate phone numbers detected in the dataset.")
+
+st.markdown("")
+
+# Name duplicates section
+st.markdown("#### Duplicate Customer Names")
+if len(duplicate_names_df) > 0:
+    st.markdown(
+        "Customers with exact or similar names. Review these pairs before processing recoveries."
+    )
+    col1, col2 = st.columns([0.2, 0.8])
+    with col1:
+        csv_data = duplicate_names_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download (CSV)",
+            data=csv_data,
+            file_name=f"duplicate_names_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            key="duplicate_names_download"
+        )
+    st.dataframe(duplicate_names_df, use_container_width=True)
+else:
+    st.info("No duplicate customer names detected in the dataset.")
+
 # ================= MAIN DASHBOARD SECTIONS =================
 st.markdown("---")
 
@@ -934,9 +984,11 @@ if len(scatter_df) > 0 and {"Assigned to contractor", "Risk_Category", "Customer
 # Filtered customer list
 st.markdown("---")
 st.subheader("📋 Filtered Customers")
+
 if len(filtered_df) > 0:
     display_cols = [
         "Customer",
+        "Customer phone numbers",
         "Assigned to contractor",
         "State",
         "Risk_Category",
@@ -950,6 +1002,17 @@ if len(filtered_df) > 0:
         "Location"
     ]
     display_cols = [col for col in display_cols if col in filtered_df.columns]
+    
+    # Download button
+    export_df = make_excel_safe(filtered_df[display_cols].sort_values(by=["Risk_Category", "Charged until"], ascending=[True, True]))
+    csv_data = export_df.to_csv(index=False)
+    st.download_button(
+        label="📥 Download Filtered Customers (CSV)",
+        data=csv_data,
+        file_name=f"filtered_customers_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv"
+    )
+    
     st.dataframe(
         filtered_df[display_cols].sort_values(by=["Risk_Category", "Charged until"], ascending=[True, True]).style.format({
             "Payoff amount": "MK {:,.0f}",
